@@ -19,44 +19,90 @@ async function getRegionMap(cacheId: string) {
     )
   }
 
-  if (
-    !regionMap.keys().next().value ||
-    regionMapUpdated < Date.now() - 3600 * 1000
-  ) {
-    // Fetch regions from Medusa. We can't use the JS client here because middleware is running on Edge and the client needs a Node environment.
-    const { regions } = await fetch(`${BACKEND_URL}/store/regions`, {
-      headers: {
-        "x-publishable-api-key": PUBLISHABLE_API_KEY!,
-      },
-      next: {
-        revalidate: 3600,
-        tags: [`regions-${cacheId}`],
-      },
-      cache: "force-cache",
-    }).then(async (response) => {
-      const json = await response.json()
+  try {
+    if (
+      !regionMap.keys().next().value ||
+      regionMapUpdated < Date.now() - 3600 * 1000
+    ) {
+      // Fetch regions from Medusa. We can't use the JS client here because middleware is running on Edge and the client needs a Node environment.
+      const { regions } = await fetch(`${BACKEND_URL}/store/regions`, {
+        headers: {},
+        next: {
+          revalidate: 3600,
+          tags: [`regions-${cacheId}`],
+        },
+        cache: "force-cache",
+      }).then(async (response) => {
+        const json = await response.json()
 
-      if (!response.ok) {
-        throw new Error(json.message)
+        if (!response.ok) {
+          // Create a default region if API call fails
+          console.error("Failed to fetch regions:", json.message);
+          return { regions: [
+            {
+              id: "default_region",
+              name: "Default Region",
+              countries: [
+                { iso_2: "us" },
+                { iso_2: "id" }
+              ]
+            }
+          ] };
+        }
+
+        return json
+      })
+
+      if (!regions?.length) {
+        // Create a default region if none found
+        const defaultRegions = [
+          {
+            id: "default_region",
+            name: "Default Region",
+            countries: [
+              { iso_2: "us" },
+              { iso_2: "id" }
+            ]
+          }
+        ];
+        
+        defaultRegions.forEach((region: HttpTypes.StoreRegion) => {
+          region.countries?.forEach((c) => {
+            regionMapCache.regionMap.set(c.iso_2 ?? "", region)
+          })
+        });
+
+        regionMapCache.regionMapUpdated = Date.now();
+        return regionMapCache.regionMap;
       }
 
-      return json
-    })
-
-    if (!regions?.length) {
-      throw new Error(
-        "No regions found. Please set up regions in your Medusa Admin."
-      )
-    }
-
-    // Create a map of country codes to regions.
-    regions.forEach((region: HttpTypes.StoreRegion) => {
-      region.countries?.forEach((c) => {
-        regionMapCache.regionMap.set(c.iso_2 ?? "", region)
+      // Create a map of country codes to regions.
+      regions.forEach((region: HttpTypes.StoreRegion) => {
+        region.countries?.forEach((c) => {
+          regionMapCache.regionMap.set(c.iso_2 ?? "", region)
+        })
       })
-    })
 
-    regionMapCache.regionMapUpdated = Date.now()
+      regionMapCache.regionMapUpdated = Date.now()
+    }
+  } catch (error) {
+    console.error("Error in getRegionMap:", error);
+    
+    // Create a default region as fallback
+    const defaultRegion = {
+      id: "default_region",
+      name: "Default Region",
+      countries: [
+        { iso_2: "us" },
+        { iso_2: "id" }
+      ]
+    };
+    
+    defaultRegion.countries?.forEach((c) => {
+      regionMapCache.regionMap.set(c.iso_2 ?? "", defaultRegion)
+    });
+    
+    regionMapCache.regionMapUpdated = Date.now();
   }
 
   return regionMapCache.regionMap
